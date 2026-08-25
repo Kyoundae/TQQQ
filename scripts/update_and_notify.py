@@ -149,12 +149,20 @@ def build_message(date_str, tag, close):
 
 
 def main():
+
     api_key = os.environ.get("TWELVEDATA_API_KEY")
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_ids_raw = os.environ.get("TELEGRAM_CHAT_IDS")
     if not all([api_key, bot_token, chat_ids_raw]):
         log("환경변수(TWELVEDATA_API_KEY / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_IDS)가 누락되었습니다.")
         sys.exit(1)
+
+
+   send_telegram_message("테스트 알림")
+
+
+
+
     chat_ids = [c.strip() for c in chat_ids_raw.split(",") if c.strip()]
     log(f"알림 수신 대상: {len(chat_ids)}명")
 
@@ -200,7 +208,6 @@ def main():
     state["last_notified_date"] = history[-1]["date"]
     save_state(state)
 
-    send_telegram_message("테스트 알림")
     log(f"완료. 발송된 알림 {sent}건.")
 
 

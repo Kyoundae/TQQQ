@@ -200,6 +200,7 @@ def main():
     state["last_notified_date"] = history[-1]["date"]
     save_state(state)
 
+    send_telegram_message("테스트 알림")
     log(f"완료. 발송된 알림 {sent}건.")
 
 

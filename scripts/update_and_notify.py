@@ -158,7 +158,7 @@ def main():
         sys.exit(1)
 
 
-   send_telegram_message("테스트 알림")
+    send_telegram_message("테스트 알림")
 
 
 

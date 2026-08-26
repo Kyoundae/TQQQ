@@ -281,7 +281,11 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
     for i in range(n):
         results.append({
             "date": dates[i],
+            "open": opens[i],
+            "high": highs[i],
+            "low": lows[i],
             "close": C[i],
+            "volume": V[i],
             "buy": bc[i] if bc[i] else None,
             "sell": ai_final[i] if ai_final[i] else None,
             "bb_upper": bb_upper[i],

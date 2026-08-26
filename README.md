@@ -1,9 +1,7 @@
-# TQQQ 매수/매도 신호 자동 알림 봇 (순수 파이썬 버전)
+# TQQQ 매수/매도 신호 자동 알림 봇 + 실시간 연동 앱 (순수 파이썬 버전)
 
 > 🔰 **GitHub이 처음이거나 설치 과정을 클릭 몇 번으로 따라 하고 싶다면
 > [`GITHUB_설치가이드.md`](./GITHUB_설치가이드.md) 를 먼저 보세요.**
-> (명령어 없이 웹 브라우저만으로 설치 가능, 여러 사람이 함께 알림
-> 받는 방법도 포함)
 
 매일 아침 6시(KST), TQQQ 최신 시세를 가져와 **엑셀/LibreOffice 없이 순수
 파이썬으로** 매수신호·매도신호를 계산하고, 새 신호가 발생하면 텔레그램으로
@@ -11,8 +9,57 @@
 일반 푸시 알림(잠금화면 알림)으로 옵니다. **여러 명에게 동시에** 알림을
 보낼 수도 있습니다 (`TELEGRAM_CHAT_IDS`에 chat_id를 쉼표로 나열).
 
+그리고 이 저장소는 **웹앱(PWA)도 함께 호스팅**합니다 — `index.html`을
+GitHub Pages로 열면, 앱이 열릴 때마다 자동으로 이 저장소의 최신
+`data.json`을 불러와 차트·신호·모의투자가 항상 최신 상태로 표시됩니다.
+
 서버를 직접 켜둘 필요 없이 **GitHub Actions**가 매일 정해진 시간에 대신
-실행해줍니다 (공개/비공개 저장소 모두 무료 티어로 충분).
+실행해줍니다.
+
+---
+
+## 이 저장소 하나로 되는 일
+
+| 구성요소 | 역할 |
+|---|---|
+| `scripts/update_and_notify.py` | 매일 최신 시세 수집 + 텔레그램 알림 |
+| `scripts/export_app_data.py` | 앱이 읽을 `data.json` 생성 (신호+지표 포함) |
+| `index.html` | 증권앱 스타일 웹앱 (PWA) — 열릴 때마다 `data.json`을 fetch |
+| `manifest.json`, `sw.js`, `icons/` | 폰 홈 화면 설치, 오프라인 캐싱 |
+| `.github/workflows/daily-signal.yml` | 매일 06:00 KST 자동 실행 (위 전부 포함) |
+
+**앱이 최신 데이터를 못 가져오는 경우** (오프라인, 또는 GitHub Pages를 아직
+설정 안 한 경우)에는 `index.html`에 내장된 스냅샷 데이터로 자동
+대체되고, 화면 상단에 "오프라인 · 저장된 데이터 사용 중"이라고 표시됩니다
+— 앱이 하얗게 깨지거나 멈추지 않습니다.
+
+---
+
+## GitHub Pages 켜기 (앱을 실제로 웹에서 열려면 필요)
+
+1. 저장소 **Settings → Pages**
+2. **Source: Deploy from a branch**, Branch: `main` / `(root)` → **Save**
+3. 1~2분 후 `https://사용자명.github.io/저장소명/` 주소로 접속 가능
+
+> ⚠️ GitHub Pages 무료 티어(개인 계정)는 **Public 저장소만** 지원합니다.
+> 지금 이 저장소가 Private이라면 Public으로 전환해야 합니다. 저장소가
+> Public이 되어도 `TWELVEDATA_API_KEY`/`TELEGRAM_BOT_TOKEN`/
+> `TELEGRAM_CHAT_IDS` 같은 **GitHub Secrets는 노출되지 않습니다** (Secrets는
+> 저장소 파일이 아니라 GitHub이 별도로 암호화 보관). 노출되는 건 코드와
+> 시세 데이터뿐입니다.
+
+Private을 꼭 유지하고 싶다면, Cloudflare Pages(Private 저장소 연결 가능,
+무료)로 호스팅하는 대안도 있습니다.
+
+---
+
+## 폰에 앱처럼 설치하기
+
+Pages 주소로 접속 후:
+- **iPhone(Safari)**: 공유 버튼 → 홈 화면에 추가
+- **Android(Chrome)**: 메뉴 → 앱 설치
+
+설치 후에도 앱을 열 때마다 최신 `data.json`을 자동으로 불러옵니다.
 
 ---
 

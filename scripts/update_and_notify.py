@@ -157,10 +157,7 @@ def main():
         sys.exit(1)
     chat_ids = [c.strip() for c in chat_ids_raw.split(",") if c.strip()]
     log(f"알림 수신 대상: {len(chat_ids)}명")
-  
-    for cid in chat_ids:
-        send_telegram(bot_token, cid, "테스트 알림")
-  
+
     history = load_history()
     last_date_str = history[-1]["date"] if history else None
     log(f"보유 이력 마지막 날짜: {last_date_str} (총 {len(history)}건)")

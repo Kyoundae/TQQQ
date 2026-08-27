@@ -8,7 +8,7 @@ on:
     # 큐 혼잡을 줄이고, 06:00 전에 데이터가 준비되도록 여유를 뒀습니다.
     # (GitHub Actions의 schedule 트리거는 "정확한 시각 보장"이 아니라
     # "그 시각 이후 가능한 빨리 실행"이라는 점을 참고해주세요.)
-    - cron: "47 20 * * *"
+    - cron: "07 21 * * *"
   workflow_dispatch: {}   # Actions 탭에서 수동 실행도 가능
 
 permissions:

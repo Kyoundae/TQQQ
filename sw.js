@@ -1,8 +1,10 @@
 // TQQQ 매매신호 앱 서비스워커
-// 앱 셸(HTML/아이콘)을 캐싱해서 오프라인에서도 최근 열었던 화면을 볼 수 있게 함.
-// 시세 데이터는 파일 안에 이미 내장되어 있으므로 별도 네트워크 데이터 캐싱은 불필요.
+// 아이콘처럼 거의 안 바뀌는 정적 자산만 캐시 우선으로 쓰고,
+// index.html / manifest.json / data.json은 항상 네트워크를 먼저 시도해서
+// "새 파일을 올렸는데도 예전 화면이 계속 보이는" 문제가 생기지 않게 한다.
+// 오프라인일 때만 마지막으로 받아둔 캐시로 대체된다.
 
-const CACHE_NAME = 'tqqq-signal-app-v2';
+const CACHE_NAME = 'tqqq-signal-app-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -11,6 +13,9 @@ const APP_SHELL = [
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
+
+// 캐시 우선으로 둬도 안전한(자주 안 바뀌는) 정적 파일만 여기 포함
+const CACHE_FIRST_SUFFIXES = ['icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -28,33 +33,37 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// 캐시 우선(앱 셸) / 네트워크 우선(data.json) 전략
-// data.json은 "앱을 열 때마다 최신 시세로 갱신"이 핵심 요구사항이므로
-// 캐시보다 네트워크를 항상 먼저 시도하고, 실패(오프라인)할 때만 캐시로 폴백한다.
+function isCacheFirstAsset(url) {
+  return CACHE_FIRST_SUFFIXES.some((suffix) => url.endsWith(suffix));
+}
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
-  const isDataJson = event.request.url.endsWith('/data.json') || event.request.url.endsWith('data.json');
+  const url = event.request.url;
 
-  if (isDataJson) {
+  // 아이콘류: 캐시 우선, 실패 시 네트워크
+  if (isCacheFirstAsset(url)) {
     event.respondWith(
-      fetch(event.request).then((resp) => {
-        const copy = resp.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        return resp;
-      }).catch(() => caches.match(event.request))
+      caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return fetch(event.request).then((resp) => {
+          const copy = resp.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return resp;
+        });
+      })
     );
     return;
   }
 
+  // index.html / manifest.json / data.json 및 그 외 모든 요청:
+  // 네트워크 우선 — 항상 최신 버전을 먼저 시도하고, 오프라인일 때만 캐시로 대체
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((resp) => {
-        const copy = resp.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        return resp;
-      }).catch(() => cached);
-    })
+    fetch(event.request, { cache: 'no-store' }).then((resp) => {
+      const copy = resp.clone();
+      caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+      return resp;
+    }).catch(() => caches.match(event.request))
   );
 });

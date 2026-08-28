@@ -66,6 +66,10 @@ def main():
             row["el"] = r(res["env_lower"])
         if res["ma200"] is not None:
             row["ma200"] = r(res["ma200"])
+        if res["rsi"] is not None:
+            row["rsi"] = r(res["rsi"], 2)
+        if res["regime"] is not None:
+            row["regime"] = res["regime"]  # "bull" / "bear"
         app_rows.append(row)
 
     payload = {

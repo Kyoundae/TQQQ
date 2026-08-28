@@ -277,6 +277,8 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
         # --- AI (최종 매도신호) ---
         ai_final[i] = "쌍고점" if ap[i] == "쌍고점" else ag[i]
 
+    regime = compute_regime(closes, ma200)
+
     results = []
     for i in range(n):
         results.append({
@@ -293,8 +295,84 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
             "env_upper": env_upper[i],
             "env_lower": env_lower[i],
             "ma200": ma200[i],
+            "rsi": rsi[i],
+            "regime": regime[i],
         })
     return results
+
+
+def compute_regime(closes, ma200):
+    """
+    상승장/하락장 판정 (다우이론식 스윙하이 돌파/실패 구조 + MA200 필터).
+
+    규칙:
+    - ±15거래일 국지 최고점을 "스윙하이"로 본다.
+    - 직전 스윙하이(기준고점)를 새 스윙하이가 넘어서면(돌파) '상승장',
+      넘지 못하면(실패) '하락장'으로 전환한다.
+    - 단, 상승장 전환은 반드시 "종가가 이미 MA200 위에 있는 날"에 일어나야
+      유효하다 — 하락장 중 MA200 아래에서의 국지적 돌파(작은 기준고점 갱신)는
+      추세전환으로 인정하지 않는다. 이는 "200일선을 처음 재돌파한 뒤 형성된
+      고점을 뚫을 때부터 상승장"이라는 정의를 구현한 것이다.
+    - 확정까지 ±15거래일의 지연(lag)이 있다 (최근 15거래일은 상승/하락장
+      판정이 아직 안 나온 상태일 수 있음 — 정상적인 특성).
+    """
+    n = len(closes)
+    W = 15
+
+    def is_swing_high(i):
+        if i - W < 0 or i + W >= n:
+            return False
+        return closes[i] == max(closes[i - W:i + W + 1])
+
+    def is_swing_low(i):
+        if i - W < 0 or i + W >= n:
+            return False
+        return closes[i] == min(closes[i - W:i + W + 1])
+
+    raw = []
+    for i in range(W, n - W):
+        if is_swing_high(i):
+            raw.append((i, "H", closes[i]))
+        elif is_swing_low(i):
+            raw.append((i, "L", closes[i]))
+
+    merged = []
+    for idx, typ, price in raw:
+        if merged and merged[-1][1] == typ:
+            if (typ == "H" and price > merged[-1][2]) or (typ == "L" and price < merged[-1][2]):
+                merged[-1] = (idx, typ, price)
+        else:
+            merged.append((idx, typ, price))
+
+    swings = [(idx, price) for idx, typ, price in merged if typ == "H"]
+
+    regime = [None] * n
+    state = None
+    ref_high_idx = None
+    ref_high_price = None
+
+    for idx, price in swings:
+        if ref_high_price is None:
+            state = "bull" if (ma200[idx] is not None and closes[idx] > ma200[idx]) else "bear"
+            for k in range(idx, n):
+                regime[k] = state
+            ref_high_idx, ref_high_price = idx, price
+            continue
+
+        if price > ref_high_price:
+            brk = next((j for j in range(ref_high_idx + 1, idx + 1) if closes[j] > ref_high_price), idx)
+            if ma200[brk] is not None and closes[brk] > ma200[brk]:
+                state = "bull"
+                for k in range(brk, n):
+                    regime[k] = state
+        else:
+            state = "bear"
+            for k in range(idx, n):
+                regime[k] = state
+
+        ref_high_idx, ref_high_price = idx, price
+
+    return regime
 
 
 def compute_from_bars(bars):

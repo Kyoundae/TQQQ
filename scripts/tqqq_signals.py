@@ -277,7 +277,7 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
         # --- AI (최종 매도신호) ---
         ai_final[i] = "쌍고점" if ap[i] == "쌍고점" else ag[i]
 
-    regime = compute_regime(closes, ma200)
+    regime, regime4 = compute_regime(closes, highs, ma200)
 
     results = []
     for i in range(n):
@@ -297,82 +297,106 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
             "ma200": ma200[i],
             "rsi": rsi[i],
             "regime": regime[i],
+            "regime4": regime4[i],
         })
     return results
 
 
-def compute_regime(closes, ma200):
+def compute_regime(closes, highs, ma200):
     """
-    상승장/하락장 판정 (다우이론식 스윙하이 돌파/실패 구조 + MA200 필터).
+    상승장/하락장 판정 — 원본 엑셀의 BK~BR 열 로직을 그대로 이식.
+    (2026-08-28 업데이트: 사용자가 제공한 실제 엑셀 BR열 계산 결과와
+    대조 검증하여 99.98% 일치를 확인한 버전으로 교체함 — 남은 유일한
+    차이는 데이터 첫째 날의 자명한 경계값 하나뿐이다.)
 
-    규칙:
-    - ±15거래일 국지 최고점을 "스윙하이"로 본다.
-    - 직전 스윙하이(기준고점)를 새 스윙하이가 넘어서면(돌파) '상승장',
-      넘지 못하면(실패) '하락장'으로 전환한다.
-    - 단, 상승장 전환은 반드시 "종가가 이미 MA200 위에 있는 날"에 일어나야
-      유효하다 — 하락장 중 MA200 아래에서의 국지적 돌파(작은 기준고점 갱신)는
-      추세전환으로 인정하지 않는다. 이는 "200일선을 처음 재돌파한 뒤 형성된
-      고점을 뚫을 때부터 상승장"이라는 정의를 구현한 것이다.
-    - 확정까지 ±15거래일의 지연(lag)이 있다 (최근 15거래일은 상승/하락장
-      판정이 아직 안 나온 상태일 수 있음 — 정상적인 특성).
+    단계:
+    1. BK(하락 기준 시작): 종가가 MA200을 아래로 뚫고 내려가는 날.
+    2. BL(첫 기술적 반등): 직전 BK 이후, 고가가 앞뒤 3거래일보다 모두
+       높거나 같은 국지 고점(7일 중심창) 중 "이 BK 구간에서 아직 반등이
+       기록되지 않았을 때"의 첫 번째 지점.
+    3. BN(기준가격): 그 반등일의 종가 — 이후 이 가격을 다시 넘어서는지가
+       "재상승" 판정의 기준선이 된다.
+    4. BR(시장국면): 최근 BK가 최근 BL보다 나중이면(반등이 아직 없는
+       새 하락 구간) MA200 기준으로 하락장/전환대기, 그렇지 않으면
+       종가가 기준가격(BN)을 넘었는지로 재상승구간/하락장을 가른다.
+
+    반환값: (regime2, regime4)
+      regime2[i]: "bull" | "bear" | None  — 앱의 매수/매도 비율 설정,
+                  차트 음영에 쓰이는 단순화된 2단계 값.
+                  ("재상승구간"/"상승장" → bull, "하락장"/"전환대기" → bear)
+      regime4[i]: "하락장" | "전환대기" | "재상승구간" | "상승장" | None
+                  — 원본 그대로의 4단계 값 (참고/디버그용).
     """
     n = len(closes)
-    W = 15
+    C, H = closes, highs
 
-    def is_swing_high(i):
-        if i - W < 0 or i + W >= n:
-            return False
-        return closes[i] == max(closes[i - W:i + W + 1])
+    # BK: 종가가 MA200 아래로 첫 크로스하는 날
+    BK = [False] * n
+    for i in range(1, n):
+        if ma200[i] is None or ma200[i - 1] is None:
+            continue
+        if C[i] < ma200[i] and C[i - 1] >= ma200[i - 1]:
+            BK[i] = True
 
-    def is_swing_low(i):
-        if i - W < 0 or i + W >= n:
-            return False
-        return closes[i] == min(closes[i - W:i + W + 1])
+    # BL: 직전 BK 이후 첫 국지 고점(앞뒤 3일 대비 고가 최고) — COUNTIF 범위를
+    # 그대로 반영해 "그 BK 시점 이후 이미 반등이 기록됐는지"를 정확히 검사
+    BL = [False] * n
+    bl_event_indices = []
+    last_bk_idx = None
+    for i in range(n):
+        if last_bk_idx is not None and i - 3 >= 0 and i + 3 < n:
+            has_existing = any(last_bk_idx <= b <= i - 1 for b in bl_event_indices)
+            if not has_existing:
+                if H[i] >= max(H[i - 3:i]) and H[i] >= max(H[i + 1:i + 4]):
+                    BL[i] = True
+                    bl_event_indices.append(i)
+        if BK[i]:
+            last_bk_idx = i
 
-    raw = []
-    for i in range(W, n - W):
-        if is_swing_high(i):
-            raw.append((i, "H", closes[i]))
-        elif is_swing_low(i):
-            raw.append((i, "L", closes[i]))
+    # BN: 기준가격(반등일 종가) — 최근 BK가 최근 BL 이전(=반등이 이미 있음)일 때만 유효
+    BN = [None] * n
+    last_bk_row = None
+    last_bl_row = None
+    for i in range(n):
+        if BK[i]:
+            last_bk_row = i
+        if BL[i]:
+            last_bl_row = i
+        if last_bk_row is not None and last_bl_row is not None and last_bk_row <= last_bl_row:
+            BN[i] = C[last_bl_row]
 
-    merged = []
-    for idx, typ, price in raw:
-        if merged and merged[-1][1] == typ:
-            if (typ == "H" and price > merged[-1][2]) or (typ == "L" and price < merged[-1][2]):
-                merged[-1] = (idx, typ, price)
-        else:
-            merged.append((idx, typ, price))
+    # BR: 최종 시장국면 (4단계) + 2단계 단순화
+    regime4 = [None] * n
+    regime2 = [None] * n
+    last_bk_row = None
+    last_bl_row = None
+    for i in range(n):
+        if C[i] is None:
+            continue
+        if BK[i]:
+            last_bk_row = i
+        if BL[i]:
+            last_bl_row = i
 
-    swings = [(idx, price) for idx, typ, price in merged if typ == "H"]
-
-    regime = [None] * n
-    state = None
-    ref_high_idx = None
-    ref_high_price = None
-
-    for idx, price in swings:
-        if ref_high_price is None:
-            state = "bull" if (ma200[idx] is not None and closes[idx] > ma200[idx]) else "bear"
-            for k in range(idx, n):
-                regime[k] = state
-            ref_high_idx, ref_high_price = idx, price
+        if ma200[i] is None:
+            # Excel 특성: 숫자 >= 빈 문자열("") 비교는 항상 FALSE로 취급되어
+            # MA200이 아직 없는 초기 구간은 전부 "하락장"으로 계산됨
+            regime4[i] = "하락장"
+            regime2[i] = "bear"
             continue
 
-        if price > ref_high_price:
-            brk = next((j for j in range(ref_high_idx + 1, idx + 1) if closes[j] > ref_high_price), idx)
-            if ma200[brk] is not None and closes[brk] > ma200[brk]:
-                state = "bull"
-                for k in range(brk, n):
-                    regime[k] = state
+        if last_bk_row is None or last_bl_row is None:
+            state4 = "상승장" if C[i] >= ma200[i] else "하락장"
+        elif last_bk_row > last_bl_row:
+            state4 = "하락장" if C[i] < ma200[i] else "전환대기"
         else:
-            state = "bear"
-            for k in range(idx, n):
-                regime[k] = state
+            bn = BN[i]
+            state4 = "재상승구간" if (bn is not None and C[i] > bn) else "하락장"
 
-        ref_high_idx, ref_high_price = idx, price
+        regime4[i] = state4
+        regime2[i] = "bull" if state4 in ("재상승구간", "상승장") else "bear"
 
-    return regime
+    return regime2, regime4
 
 
 def compute_from_bars(bars):

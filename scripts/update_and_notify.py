@@ -8,7 +8,7 @@ TQQQ 매수/매도 신호 자동 갱신 + 텔레그램(폰 푸시) 알림 — �
   1. price_history.json에서 마지막 저장된 날짜를 찾는다.
   2. Twelve Data API에서 그 이후의 신규 일봉을 가져와 이어붙인다.
   3. 전체 이력(현재 약 4,150여 개 캔들)에 대해 tqqq_signals.compute_signals()로
-     매수(BC)/매도(AI) 신호를 처음부터 다시 계산한다. (4천여 개 캔들 기준
+     매수(BF)/매도(AJ) 신호를 처음부터 다시 계산한다. (4천여 개 캔들 기준
      0.1~0.2초 수준이라 매번 새로 계산해도 충분히 빠르다.)
   4. state.json에 기록된 '마지막으로 알림을 보낸 날짜' 이후 행 중
      신호가 발생한 행을 찾아 텔레그램으로 보낸다.
@@ -158,11 +158,6 @@ def main():
     chat_ids = [c.strip() for c in chat_ids_raw.split(",") if c.strip()]
     log(f"알림 수신 대상: {len(chat_ids)}명")
 
-    for cid in chat_ids:
-        send_telegram(bot_token, cid, "테스트 알림")
-
-
-  
     history = load_history()
     last_date_str = history[-1]["date"] if history else None
     log(f"보유 이력 마지막 날짜: {last_date_str} (총 {len(history)}건)")

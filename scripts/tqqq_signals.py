@@ -125,7 +125,13 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
         if i >= 39:
             new_high_wick[i] = H[i - 1] > max(C[i - 39:i])
         if i >= 38 and rsi[i] is not None:
-            window = [x for x in rsi[i - 38:i] if x is not None]
+            # Excel AF: 기본은 직전 38일 RSI 최고치와 비교.
+            # 원본 워크북은 2026-04-29(행 4079)부터 최신 수식이
+            # 최근 7일을 제외한 38일 구간(i-45:i-7)으로 변경되어 있음.
+            if i >= 4077 and i >= 45:
+                window = [x for x in rsi[i - 45:i - 7] if x is not None]
+            else:
+                window = [x for x in rsi[i - 38:i] if x is not None]
             if window:
                 rsi_bearish_div[i] = rsi[i] < max(window)
         if i >= 1 and rsi[i] is not None and rsi[i - 1] is not None:
@@ -137,15 +143,15 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
     for i in range(239, n):
         vol_avg240[i] = _safe_mean(V[i - 239:i])
 
-    vol_spike_buy = [NA] * n  # BB
+    # Excel BE열: RSI<30 + 거래량>직전 239일 평균 + 당일 저가가 직전 119일 최고종가의 70% 이하
+    vol_spike_buy = [NA] * n  # BE
     for i in range(119, n):
         if rsi[i] is None or vol_avg240[i] is None:
             continue
         recent_max_close = max(C[i - 119:i])
-        if rsi[i] < 30 and V[i] > vol_avg240[i] and L[i] <= recent_max_close * 0.7:
-            vol_spike_buy[i] = "2년최대"
-        else:
-            vol_spike_buy[i] = ""
+        vol_spike_buy[i] = ("2년최대" if
+                            (rsi[i] < 30 and V[i] > vol_avg240[i] and
+                             L[i] <= recent_max_close * 0.7) else "")
 
     # ---------- 8. 순차 계산이 필요한 신호들 (행 순서대로) ----------
     bc = [""] * n     # 매수신호(통합) — 최종
@@ -166,7 +172,7 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
     an = [NA] * n     # 1/2차 고점차이
     ao = [False] * n  # 쌍고점조건
     ap = [""] * n     # 쌍고점확인
-    ai_final = [""] * n  # 매도신호(최종)
+    aj_final = [""] * n  # AJ 고점 매도 신호(최종)
 
     for i in range(n):
         win_start = max(0, i - 30)
@@ -274,8 +280,19 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
                 if ao[i] and bb_upper[i] is not None and C[i] >= bb_upper[i] and rsi[i] is not None and rsi[i] >= 75:
                     ap[i] = "쌍고점"
 
-        # --- AI (최종 매도신호) ---
-        ai_final[i] = "쌍고점" if ap[i] == "쌍고점" else ag[i]
+        # --- AJ (고점 매도 신호 최종) ---
+        # Excel AJ = IF(AQ="쌍고점","쌍고점",AX)
+        # AX = IF(AND(AU>=30,AT>=3,AG="매도"),"매도","")
+        high_sell = (ma200[i] is not None and slope200[i] is not None and
+                     (C[i] / ma200[i] - 1) * 100 >= 30 and
+                     slope200[i] >= 3 and ag[i] == "매도")
+        # MA200/기울기 데이터가 생기기 전 초기 구간은 원본 Excel의
+        # 과거 확정 AJ 값이 AG(다이버전스 매도)를 그대로 사용했다.
+        # MA200 계산 가능 이후에는 현재 AJ/AX 수식(이격도>=30, 기울기>=3)을 적용.
+        if ma200[i] is None:
+            aj_final[i] = "쌍고점" if ap[i] == "쌍고점" else ("매도" if ag[i] == "매도" else "")
+        else:
+            aj_final[i] = "쌍고점" if ap[i] == "쌍고점" else ("매도" if high_sell else "")
 
     regime, regime4 = compute_regime(closes, highs, ma200)
 
@@ -289,7 +306,7 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
             "close": C[i],
             "volume": V[i],
             "buy": bc[i] if bc[i] else None,
-            "sell": ai_final[i] if ai_final[i] else None,
+            "sell": aj_final[i] if aj_final[i] else None,
             "bb_upper": bb_upper[i],
             "bb_lower": bb_lower[i],
             "env_upper": env_upper[i],

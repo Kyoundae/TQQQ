@@ -31,6 +31,7 @@ def _safe_stdev(vals):
 def compute_signals(dates, opens, highs, lows, closes, volumes):
     n = len(closes)
     C, H, L, V = closes, highs, lows, volumes
+    O = opens
 
     NA = None  # 빈 셀(엑셀의 "") 표현
 
@@ -68,12 +69,13 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
     # ---------- 3. Bollinger Band(120일 SMA ±2σ) ----------
     bb_upper = [NA] * n
     bb_lower = [NA] * n
+    std120 = [NA] * n
     for i in range(119, n):
         window = C[i - 119:i + 1]
         sma120 = _safe_mean(window)
-        std120 = _safe_stdev(window)
-        bb_upper[i] = sma120 + 2 * std120
-        bb_lower[i] = sma120 - 2 * std120
+        std120[i] = _safe_stdev(window)
+        bb_upper[i] = sma120 + 2 * std120[i]
+        bb_lower[i] = sma120 - 2 * std120[i]
 
     # ---------- 4. MA200 및 기울기 ----------
     ma200 = [NA] * n
@@ -85,14 +87,19 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
         if i - 20 >= 199 and ma200[i - 20]:
             slope200[i] = (ma200[i] / ma200[i - 20] - 1) * 100
 
-    regime = [NA] * n  # 대세하락장(AR) — 문자열, "빈칸 아님" 여부만 실질적으로 쓰임
+    vol_state = [NA] * n  # 대세하락장(AS) — 문자열, "빈칸 아님" 여부만 실질적으로 쓰임
     for i in range(199, n):
         if slope200[i] is not None and slope200[i] > 2 and C[i] > ma200[i] * 0.7:
-            regime[i] = "강세장"
+            vol_state[i] = "강세장"
         elif slope200[i] is not None and slope200[i] < -0.15:
-            regime[i] = "약세장"
+            vol_state[i] = "약세장"
         else:
-            regime[i] = "변동성"
+            vol_state[i] = "변동성"
+
+    # ---------- 4.5 시장국면(BU) + 전량매도/추격매수(BV) — 다른 신호 계산보다
+    # 먼저 구해 둬야 아래 최종 매수/매도 신호 조립 시 바로 참조할 수 있다 ----------
+    regime, bk_flags, _bq_debug = compute_regime(env_upper, C, H, ma200)
+    bv = compute_special_signals(H, C, ma200, regime, bk_flags, std120)
 
     # ---------- 5. 10일 -20%(AT), E-B 3% 근접(AU) ----------
     drop10 = [NA] * n
@@ -224,11 +231,18 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
             ba[i] = "2년최대" if C[i] <= base_close * 0.85 else ""
 
         # --- BC (최종 매수신호) ---
+        # 엑셀 BF: 직전 20일(오늘 포함) 내 "전량매도"가 있으면 모든 매수신호 억제.
+        # 그렇지 않으면 찐쌍바닥 > 3X매수 > 추격매수 순으로 판정.
         au_i = rebound_confirm[i]
-        if bi[i] != "" and au_i != "반등확인":
+        sell_off_recent = "전량매도" in bv[max(0, i - 19):i + 1]
+        if sell_off_recent:
+            bc[i] = ""
+        elif bi[i] != "" and au_i != "반등확인":
             bc[i] = "찐쌍바닥"
         elif ba[i] == "2년최대" and au_i != "반등확인":
             bc[i] = "3X매수"
+        elif bv[i] == "추격매수":
+            bc[i] = "추격매수"
         else:
             bc[i] = ""
 
@@ -241,7 +255,7 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
         # --- AV (하락장반등매도) ---
         bi_win_start = max(0, i - 29)
         bi_window = bi[bi_win_start:i + 1]
-        if (regime[i] is not None and drop10[i] is not None and slope200[i] is not None):
+        if (vol_state[i] is not None and drop10[i] is not None and slope200[i] is not None):
             if drop10[i] and slope200[i] <= -0.05 and "찐쌍바닥" not in bi_window:
                 av[i] = "하락반등매도"
 
@@ -281,7 +295,7 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
                     ap[i] = "쌍고점"
 
         # --- AJ (고점 매도 신호 최종) ---
-        # Excel AJ = IF(AQ="쌍고점","쌍고점",AX)
+        # Excel AJ = IF(AQ="쌍고점","쌍고점", IF(BV="전량매도","전량매도", AX))
         # AX = IF(AND(AU>=30,AT>=3,AG="매도"),"매도","")
         high_sell = (ma200[i] is not None and slope200[i] is not None and
                      (C[i] / ma200[i] - 1) * 100 >= 30 and
@@ -289,12 +303,14 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
         # MA200/기울기 데이터가 생기기 전 초기 구간은 원본 Excel의
         # 과거 확정 AJ 값이 AG(다이버전스 매도)를 그대로 사용했다.
         # MA200 계산 가능 이후에는 현재 AJ/AX 수식(이격도>=30, 기울기>=3)을 적용.
-        if ma200[i] is None:
-            aj_final[i] = "쌍고점" if ap[i] == "쌍고점" else ("매도" if ag[i] == "매도" else "")
+        if ap[i] == "쌍고점":
+            aj_final[i] = "쌍고점"
+        elif bv[i] == "전량매도":
+            aj_final[i] = "전량매도"
+        elif ma200[i] is None:
+            aj_final[i] = "매도" if ag[i] == "매도" else ""
         else:
-            aj_final[i] = "쌍고점" if ap[i] == "쌍고점" else ("매도" if high_sell else "")
-
-    regime, regime4 = compute_regime(closes, highs, ma200)
+            aj_final[i] = "매도" if high_sell else ""
 
     results = []
     for i in range(n):
@@ -314,38 +330,37 @@ def compute_signals(dates, opens, highs, lows, closes, volumes):
             "ma200": ma200[i],
             "rsi": rsi[i],
             "regime": regime[i],
-            "regime4": regime4[i],
         })
     return results
 
 
-def compute_regime(closes, highs, ma200):
+def compute_regime(env_upper, closes, highs, ma200):
     """
-    상승장/하락장 판정 — 원본 엑셀의 BK~BR 열 로직을 그대로 이식.
-    (2026-08-28 업데이트: 사용자가 제공한 실제 엑셀 BR열 계산 결과와
-    대조 검증하여 99.98% 일치를 확인한 버전으로 교체함 — 남은 유일한
-    차이는 데이터 첫째 날의 자명한 경계값 하나뿐이다.)
+    상승장/하락장 판정 — 엑셀 BU열 수식을 그대로 이식 (2026-09 재검증 버전).
 
-    단계:
-    1. BK(하락 기준 시작): 종가가 MA200을 아래로 뚫고 내려가는 날.
-    2. BL(첫 기술적 반등): 직전 BK 이후, 고가가 앞뒤 3거래일보다 모두
-       높거나 같은 국지 고점(7일 중심창) 중 "이 BK 구간에서 아직 반등이
-       기록되지 않았을 때"의 첫 번째 지점.
-    3. BN(기준가격): 그 반등일의 종가 — 이후 이 가격을 다시 넘어서는지가
-       "재상승" 판정의 기준선이 된다.
-    4. BR(시장국면): 최근 BK가 최근 BL보다 나중이면(반등이 아직 없는
-       새 하락 구간) MA200 기준으로 하락장/전환대기, 그렇지 않으면
-       종가가 기준가격(BN)을 넘었는지로 재상승구간/하락장을 가른다.
+    엑셀 BU 수식:
+        =IF(E="", "", IF(OR(AND(BQ<>"", E>BQ), AND(O<>"", AR<>"", O>AR)),
+                          "상승장", "하락장"))
+    여기서 O열은 시가(Open)가 아니라 "Env_Upper(+20%)"(엔벨로프 상단, 20일
+    SMA*1.2) 컬럼이다 — 컬럼 문자 O와 필드명 "Open"의 앞글자가 같아서
+    착각하기 쉬운 부분이니 주의. 즉 "기준가격(BQ)이 있고 종가가 그걸
+    넘었다" 또는 "엔벨로프 상단이 MA200(AR)을 넘었다" 둘 중 하나만 참이면
+    상승장 — 두 조건은 서로 독립적인 OR.
 
-    반환값: (regime2, regime4)
-      regime2[i]: "bull" | "bear" | None  — 앱의 매수/매도 비율 설정,
-                  차트 음영에 쓰이는 단순화된 2단계 값.
-                  ("재상승구간"/"상승장" → bull, "하락장"/"전환대기" → bear)
-      regime4[i]: "하락장" | "전환대기" | "재상승구간" | "상승장" | None
-                  — 원본 그대로의 4단계 값 (참고/디버그용).
+    BQ(기준가격) 계산 체인:
+      BK(하락 기준 시작): 종가가 MA200을 아래로 처음 뚫는 날
+      BL(첫 기술적 반등): 그 이후 첫 국지 고점(앞뒤 3거래일보다 고가가 높거나
+                          같음), 단 그 BK 구간에서 아직 반등이 없었을 때만
+      BQ: 가장 최근 BK가 가장 최근 BL보다 나중이 아닐 때(=반등이 이미 기록됨)
+          그 반등일의 종가
+
+    반환값: (regime, bk_flags, bq_values)
+      regime[i]: "bull" | "bear" | None
+      bk_flags[i]: bool — BV(전량매도) 계산에 재사용
+      bq_values[i]: 기준가격 또는 None — 디버그/검증용
     """
     n = len(closes)
-    C, H = closes, highs
+    C, H, EU = closes, highs, env_upper
 
     # BK: 종가가 MA200 아래로 첫 크로스하는 날
     BK = [False] * n
@@ -355,8 +370,7 @@ def compute_regime(closes, highs, ma200):
         if C[i] < ma200[i] and C[i - 1] >= ma200[i - 1]:
             BK[i] = True
 
-    # BL: 직전 BK 이후 첫 국지 고점(앞뒤 3일 대비 고가 최고) — COUNTIF 범위를
-    # 그대로 반영해 "그 BK 시점 이후 이미 반등이 기록됐는지"를 정확히 검사
+    # BL: 직전 BK 이후 첫 국지 고점(앞뒤 3일 대비 고가 최고)
     BL = [False] * n
     bl_event_indices = []
     last_bk_idx = None
@@ -370,8 +384,8 @@ def compute_regime(closes, highs, ma200):
         if BK[i]:
             last_bk_idx = i
 
-    # BN: 기준가격(반등일 종가) — 최근 BK가 최근 BL 이전(=반등이 이미 있음)일 때만 유효
-    BN = [None] * n
+    # BQ: 기준가격(반등일 종가) — 최근 BK가 최근 BL보다 나중이 아닐 때만 유효
+    BQ = [None] * n
     last_bk_row = None
     last_bl_row = None
     for i in range(n):
@@ -380,40 +394,61 @@ def compute_regime(closes, highs, ma200):
         if BL[i]:
             last_bl_row = i
         if last_bk_row is not None and last_bl_row is not None and last_bk_row <= last_bl_row:
-            BN[i] = C[last_bl_row]
+            BQ[i] = C[last_bl_row]
 
-    # BR: 최종 시장국면 (4단계) + 2단계 단순화
-    regime4 = [None] * n
-    regime2 = [None] * n
-    last_bk_row = None
-    last_bl_row = None
+    # BU: 최종 시장국면 — 엑셀과 동일한 순수 OR 조건 (O열=Env_Upper)
+    regime = [None] * n
     for i in range(n):
         if C[i] is None:
             continue
-        if BK[i]:
-            last_bk_row = i
-        if BL[i]:
-            last_bl_row = i
+        cond1 = BQ[i] is not None and C[i] > BQ[i]
+        cond2 = (EU[i] is not None and ma200[i] is not None and EU[i] > ma200[i])
+        regime[i] = "bull" if (cond1 or cond2) else "bear"
 
-        if ma200[i] is None:
-            # Excel 특성: 숫자 >= 빈 문자열("") 비교는 항상 FALSE로 취급되어
-            # MA200이 아직 없는 초기 구간은 전부 "하락장"으로 계산됨
-            regime4[i] = "하락장"
-            regime2[i] = "bear"
-            continue
+    return regime, BK, BQ
 
-        if last_bk_row is None or last_bl_row is None:
-            state4 = "상승장" if C[i] >= ma200[i] else "하락장"
-        elif last_bk_row > last_bl_row:
-            state4 = "하락장" if C[i] < ma200[i] else "전환대기"
-        else:
-            bn = BN[i]
-            state4 = "재상승구간" if (bn is not None and C[i] > bn) else "하락장"
 
-        regime4[i] = state4
-        regime2[i] = "bull" if state4 in ("재상승구간", "상승장") else "bear"
+def compute_special_signals(highs, closes, ma200, regime, bk_flags, std120):
+    """
+    전량매도 / 추격매수 — 엑셀 BV열("전량매도/추격매수") 수식을 그대로 이식.
 
-    return regime2, regime4
+    엑셀 BV 수식(요지):
+      전량매도: 오늘이 BK(하락 기준 시작)일 &&
+                직전 60일 고가 최고치 == 직전 240일 고가 최고치(최근 1년 내
+                신고가 경신 없이 정체) &&
+                오늘 종가 <= (직전 60일 고가 최고치)*0.85(고점대비 -15%) &&
+                직전 60일 내 이미 "전량매도"가 없었음(중복 방지) &&
+                StDev%(=BB표준편차120/종가) < 0.14
+      추격매수: 위 조건이 아니고, 오늘 국면이 상승장으로 전환된 첫날
+                (오늘 상승장 && 어제 하락장)
+    """
+    n = len(closes)
+    H, C = highs, closes
+    bv = [None] * n
+
+    for i in range(n):
+        is_full_sell = False
+        if bk_flags[i] and i >= 1:
+            win60_start = max(0, i - 60)
+            win240_start = max(0, i - 240)
+            max60 = max(H[win60_start:i]) if H[win60_start:i] else None
+            max240 = max(H[win240_start:i]) if H[win240_start:i] else None
+            if (max60 is not None and max240 is not None and max60 == max240
+                    and C[i] is not None and C[i] <= max60 * 0.85
+                    and std120[i] is not None and C[i] and (std120[i] / C[i]) < 0.14):
+                dedup_start = max(0, i - 60)
+                if "전량매도" not in bv[dedup_start:i]:
+                    is_full_sell = True
+
+        if is_full_sell:
+            bv[i] = "전량매도"
+        elif (regime[i] == "bull" and i >= 1 and regime[i - 1] == "bear"):
+            bv[i] = "추격매수"
+
+    return bv
+
+
+
 
 
 def compute_from_bars(bars):

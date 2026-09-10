@@ -4,7 +4,7 @@
 // "새 파일을 올렸는데도 예전 화면이 계속 보이는" 문제가 생기지 않게 한다.
 // 오프라인일 때만 마지막으로 받아둔 캐시로 대체된다.
 
-const CACHE_NAME = 'tqqq-signal-app-v3';
+const CACHE_NAME = 'tqqq-signal-app-v4';
 const APP_SHELL = [
   './',
   './index.html',
